@@ -58,6 +58,7 @@ Build and replicate Azure portal UI pages using **Fluent UI React v9** with Azur
 | `references/output-schema.md`           | Structural validation checklist + grep checks for generated files |
 | `references/canonical-examples/*/`      | Gold-standard complete outputs for few-shot anchoring (resource-blade, browse-list, dashboard) |
 | `references/fragments/*.tsx`            | Copy-paste-ready composable sub-patterns (command-bar, sidebar-nav, data-table, etc.) |
+| `references/sync-protocol.md`           | Template/fragment drift detection and sync-back protocol                              |
 
 **Load ALL reference files before starting any build.**
 
@@ -414,6 +415,7 @@ Generate the actual React component files.
 ├── theme.ts           # Azure brand theme (light + dark)
 ├── grid-template.ts   # Extracted/matched grid template definition
 ├── icons.ts           # Icon imports + auto-extracted icon wrappers
+├── sync-manifest.json # Records which templates/fragments were used (for drift detection)
 ├── assets/            # Auto-extracted SVGs and downloaded images (Tier 2 icons)
 │   ├── icon-*.svg
 │   └── icon-*.png
@@ -447,6 +449,10 @@ Before generating any file:
    - Every makeStyles class must satisfy the assertions for its element type
    - Check each generated style value against the assertion table before writing
 
+4. **Read the sync protocol** from `references/sync-protocol.md`
+   - Understand the region marker format and sync manifest structure
+   - This is required to enable drift detection later
+
 ### File Generation Rules
 
 #### theme.ts
@@ -472,6 +478,8 @@ export const azureDarkTheme: Theme = {
 - Reference `tokens.*` for ALL design values — **never hardcode colors, spacing, fonts, or shadows**
 - Follow the matched grid template's `makeStyles` example
 - Include dark mode styles only where theme tokens don't auto-adapt (rare — most Fluent tokens are theme-aware)
+- **Wrap fragment-sourced styles in region markers:** `/* region:fragment:<name> */` ... `/* endregion:fragment:<name> */`
+- **Wrap template-sourced layout styles in:** `/* region:template:<name> */` ... `/* endregion:template:<name> */`
 
 #### index.tsx
 - Wrap entire component in `<FluentProvider theme={azureLightTheme}>` (or with ThemeToggle for dark mode)
@@ -481,6 +489,14 @@ export const azureDarkTheme: Theme = {
 - Follow the matched grid template's structural layout
 - All interactive elements must have proper `aria-label` or `aria-labelledby`
 - Use semantic HTML (`<nav>`, `<main>`, `<header>`, `<section>`)
+- **Wrap each fragment's JSX in region markers:** `{/* region:fragment:<name> */}` ... `{/* endregion:fragment:<name> */}`
+- **Wrap grid template layout sections in:** `{/* region:template:<name> */}` ... `{/* endregion:template:<name> */}`
+
+#### sync-manifest.json
+- Generate alongside the output files during BUILD
+- Records the grid template, fragments, and canonical example used
+- Enables drift detection when the user modifies generated code later
+- See `references/sync-protocol.md` for the full schema
 
 #### data.ts
 - Export typed mock data objects
@@ -801,6 +817,70 @@ After BUILD and before the live VERIFY, run a static code audit:
 
 ---
 
+## Phase 5: SYNC CHECK — Template & Fragment Drift Detection
+
+After any user-requested modification to the generated code (iterations, fixes, feature additions), detect whether the changes affect code that originated from skill fragments or grid templates, and offer to sync improvements back.
+
+**Read `references/sync-protocol.md` for the full protocol.**
+
+### When to Run
+
+- After every user-requested modification to the generated component
+- At the end of BUILD if fragments were customized beyond data adaptation
+- During Incremental Versioning (comparing v{N} against source fragments)
+
+### Steps
+
+1. **Read `sync-manifest.json`** from the output directory
+   - If it doesn't exist, skip (component wasn't built by this skill)
+
+2. **Extract modified regions** from the current output files
+   - Find code between `region:fragment:<name>` / `endregion:fragment:<name>` markers
+   - Find code between `region:template:<name>` / `endregion:template:<name>` markers
+   - If markers were removed, locate equivalent code blocks by component/style names
+
+3. **Compare each region against its source** fragment/template file
+   - Normalize whitespace and strip comments for comparison
+   - Classify changes as **adaptation** (data/props only) or **structural** (components, styles, patterns)
+   - Adaptation = no sync needed; Structural = trigger sync prompt
+
+4. **Detect new patterns** not covered by any existing fragment
+   - Scan output for reusable patterns outside any `region:fragment:*` markers
+   - If a new pattern has high reuse potential, prompt to save as a new fragment
+
+5. **Present sync prompt** to the user:
+   ```
+   Template/Fragment Sync Check
+
+   The following skill references were modified during this build:
+
+   1. Fragment: command-bar
+      Changed: Added overflow menu with MenuButton + Menu for secondary actions
+
+   2. Template: azure-browse-page  
+      Changed: Added sticky pagination bar
+
+   Would you like to:
+     (a) Update the source fragments/templates with these improvements
+     (b) Keep changes local to this build only
+     (c) Review the diff for each change before deciding
+   ```
+
+6. **If the user approves sync:**
+   - Read the source fragment/template file
+   - Apply structural changes while generalizing page-specific details
+   - Update fragment header comments to document new capabilities
+   - Update `references/fragments/README.md` if fragment descriptions changed
+   - For grid templates, update ASCII diagram, TypeScript definition, and makeStyles example
+   - Log changes in the template's `## Changelog` section
+
+7. **If a new fragment is approved:**
+   - Extract, generalize, and save to `references/fragments/<name>.tsx`
+   - Add entry to `references/fragments/README.md`
+   - Update `references/decision-table.md` to reference where applicable
+
+---
+
 ## Incremental Versioning
 
 When updating an existing component:
@@ -864,3 +944,6 @@ Optional (Storybook):
 14. **Always use fragments for recurring sub-patterns.** If a fragment exists in `references/fragments/` for a sub-pattern (command bar, sidebar nav, data table, etc.), use its exact structure. Never regenerate these patterns from scratch.
 15. **Always validate against style assertions during BUILD.** Read `references/style-assertions.md` and check every makeStyles block against its element-type assertions before writing `styles.ts`. Violations must be fixed before the file is written.
 16. **Always run output schema validation after BUILD.** Read `references/output-schema.md` and execute all structural checks and grep commands. All checks must pass before proceeding to VERIFY.
+17. **Always generate `sync-manifest.json` during BUILD.** Record which grid template, fragments, and canonical example were used. This enables drift detection on future modifications.
+18. **Always wrap fragment and template code in region markers.** Use `/* region:fragment:<name> */` / `/* endregion:fragment:<name> */` in `styles.ts` and `{/* region:fragment:<name> */}` / `{/* endregion:fragment:<name> */}` in `index.tsx`. Same pattern for templates with `region:template:<name>`.
+19. **Always run SYNC CHECK after modifying generated code.** When the user requests changes to a component built by this skill, run drift detection before finishing. Prompt the user to sync structural improvements back to the fragment/template library.

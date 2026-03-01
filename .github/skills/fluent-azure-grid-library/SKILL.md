@@ -177,11 +177,28 @@ interface GridTemplate {
 
 ## Integration with fluent-azure-replicator
 
-The replicator skill calls into this library at two points:
+The replicator skill calls into this library at three points:
 
 1. **Mode A (URL replication) — ANALYZE phase:** After extracting the source page's computed grid structure, the replicator calls MATCH to find the closest template. If matched (score ≥ 0.5), the template is used as the layout foundation. If not, a new template is extracted and optionally saved.
 
 2. **Mode B (description-based) — TEMPLATE-SELECT phase:** The replicator presents available templates via LIST, then uses MATCH with the user's description. If no good match exists, CREATE is invoked to build a custom template first.
+
+3. **SYNC CHECK phase:** After the user modifies generated code, the replicator detects drift in template-sourced layout styles (tracked by `region:template:<name>` markers). If structural changes are found, the replicator prompts the user and—if approved—calls EXTEND to apply the changes back to the source template. See `references/sync-protocol.md` in the replicator skill for the full protocol.
+
+### 6. SYNC-BACK — Apply Improvements from Built Prototypes
+
+When the replicator's SYNC CHECK detects that a prototype's layout has structurally improved on a grid template and the user approves syncing:
+
+1. Receive the modified layout slot definitions from the replicator
+2. Read the existing template file
+3. Apply changes using the EXTEND operation:
+   - Add new slots if slots were added
+   - Update slot dimensions/styles if they changed
+   - Add responsive breakpoints if they were introduced
+4. Update the ASCII structure diagram to reflect the new layout
+5. Update the `makeStyles` usage example
+6. Log the change in `## Changelog` at the bottom of the template file
+7. If the change is substantial enough (score < 0.5 against the old template), consider if it should be a new template instead
 
 ## Rules
 
@@ -190,3 +207,4 @@ The replicator skill calls into this library at two points:
 3. **Extend, don't duplicate** — if a new template is very similar to an existing one (DIFF score > 0.8 overlap), extend the existing template or use `parentTemplate` reference instead.
 4. **Azure naming** — prefix templates for Azure portal patterns with `azure-`. Custom/non-Azure layouts use descriptive names without the prefix.
 5. **Keep `makeStyles` examples up to date** — whenever slot layout changes, update both the template definition and the `makeStyles` section.
+6. **Accept sync-back updates from the replicator** — when the replicator's SYNC CHECK offers template improvements, apply them through EXTEND. The replicator generalizes the changes before passing them; verify they remain generic and reusable.
