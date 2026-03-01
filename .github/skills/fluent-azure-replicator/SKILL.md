@@ -53,6 +53,11 @@ Build and replicate Azure portal UI pages using **Fluent UI React v9** with Azur
 | `references/composition-rules.md`       | Component nesting validation (14 hard + 5 soft constraints) |
 | `references/verification.md`            | Self-verification procedure with grid comparison, a11y, states |
 | `references/grid-templates/*.md`        | Pre-seeded Azure page layout templates             |
+| `references/decision-table.md`          | Intent → deterministic build plan mapping (layout, fragments, canonical example) |
+| `references/style-assertions.md`        | Hard style constraints checked during BUILD (token values, layout rules) |
+| `references/output-schema.md`           | Structural validation checklist + grep checks for generated files |
+| `references/canonical-examples/*/`      | Gold-standard complete outputs for few-shot anchoring (resource-blade, browse-list, dashboard) |
+| `references/fragments/*.tsx`            | Copy-paste-ready composable sub-patterns (command-bar, sidebar-nav, data-table, etc.) |
 
 **Load ALL reference files before starting any build.**
 
@@ -294,6 +299,9 @@ Transform raw extracted data into a build plan.
    - `references/icon-map.md`
    - `references/azure-brand-ramp.md`
    - `references/composition-rules.md`
+   - `references/decision-table.md`
+   - `references/style-assertions.md`
+   - `references/output-schema.md`
 
 2. **Map computed styles → Fluent tokens:**
    For each extracted element's computed styles, find the closest Fluent v9 token:
@@ -328,6 +336,24 @@ Transform raw extracted data into a build plan.
    - If best score ≥ 0.5 → use that template as layout foundation
    - If best score < 0.5 → generate a custom layout and offer to save it as a new template
 
+5b. **Look up decision table:**
+   Read `references/decision-table.md` and match the detected page type against the Intent Patterns column:
+   - If a row matches → the build plan is fully determined: use its Layout Template, Fragments, and Canonical Example
+   - Record which fragments are required (command-bar, sidebar-nav, data-table, etc.)
+   - This overrides any ambiguous component mapping from step 3
+
+5c. **Load canonical example:**
+   Based on the decision table match, read the corresponding canonical example from `references/canonical-examples/<type>/`:
+   - Read ALL files in the example directory (index.tsx, styles.ts, data.ts, icons.ts, theme.ts, stories)
+   - Use the canonical example as the primary structural template — match its file organization, import patterns, and component composition
+   - The canonical example anchors the output more strongly than prose rules
+
+5d. **Load required fragments:**
+   For each fragment listed in the decision table row, read the fragment file from `references/fragments/<name>.tsx`:
+   - Use the fragment's exact component structure, styles, and patterns
+   - Adapt prop names and type definitions to the specific page being built
+   - Never regenerate a pattern from scratch when a fragment exists for it
+
 6. **Build the component tree:**
    Create a hierarchical plan of components:
    ```
@@ -356,13 +382,20 @@ Transform raw extracted data into a build plan.
 
 ## Phase 2 (Mode B): TEMPLATE-SELECT
 
-For description-based builds, skip CAPTURE and ANALYZE:
+For description-based builds, skip CAPTURE and use the decision table for deterministic planning:
 
 1. Read the user's description
-2. LIST available templates (via grid-library skill)
-3. MATCH the description against templates
-4. If match found → confirm with user → proceed to BUILD
-5. If no match → offer to CREATE a new template or build with closest match
+2. **Look up the decision table** (`references/decision-table.md`): match the description against Intent Patterns
+3. If a row matches → the build plan is fully determined:
+   - Layout Template, Fragments, Canonical Example, and feature flags (Sidebar, DataGrid, etc.) are all specified
+   - Read the matched canonical example from `references/canonical-examples/<type>/` — use as the structural anchor
+   - Read each required fragment from `references/fragments/` — compose into the build
+   - Confirm with user → proceed to BUILD
+4. If no row matches → fall back to grid-library MATCH:
+   - LIST available templates (via grid-library skill)
+   - MATCH the description against templates
+   - If match found → confirm with user → proceed to BUILD
+   - If no match → offer to CREATE a new template or build with closest match
 
 ---
 
@@ -397,6 +430,22 @@ Place output in the project based on detected project structure:
 4. If `app/` exists (Next.js) → `app/<component-name>/`
 5. If none detected → `src/<ComponentName>/`
 6. If incremental version → `<parent>/<ComponentName>/v{N}/`
+
+### Pre-Build: Load Canonical Example & Fragments
+
+Before generating any file:
+
+1. **Read the canonical example** identified during ANALYZE/TEMPLATE-SELECT from `references/canonical-examples/<type>/`
+   - Read every file in the directory (index.tsx, styles.ts, data.ts, icons.ts, theme.ts, stories)
+   - Use the canonical example as the primary template — match its structure, patterns, and conventions
+
+2. **Read each required fragment** from `references/fragments/`
+   - For each sub-pattern needed (command bar, sidebar, data table, etc.), read the fragment file
+   - Copy the fragment's component structure and adapt only the data/prop types
+
+3. **Read style assertions** from `references/style-assertions.md`
+   - Every makeStyles class must satisfy the assertions for its element type
+   - Check each generated style value against the assertion table before writing
 
 ### File Generation Rules
 
@@ -746,6 +795,9 @@ After BUILD and before the live VERIFY, run a static code audit:
 2. **For every hardcoded value:** Check if it should be a `tokens.*` reference. Reference `token-map.md`.
 3. **For every icon:** Verify the import exists in `@fluentui/react-icons`, the name matches the tables in `icon-map.md`, and icons are passed via the `icon` prop slot (not rendered as text children). Verify `bundleIcon()` is used for any toggle/selection state icons. Verify no wildcard imports, no Iconify URLs, no external icon CDNs. **Verify that every icon has a `makeStyles` class setting its exact source pixel dimensions** — check the size comments in `icons.ts` against the `fontSize` values in `styles.ts`.
 4. **For every layout section:** Verify it matches the grid template. Reference the matched template file.
+5. **Run style assertions check:** Read `references/style-assertions.md` and verify every makeStyles class in `styles.ts` satisfies the relevant assertions. Fix any violations.
+6. **Run output schema validation:** Read `references/output-schema.md` and execute the structural checklist against all generated files. Run the grep checks from the schema. Fix any failures before proceeding to VERIFY.
+7. **Compare against canonical example:** Diff the generated output's structure against the canonical example used during BUILD. Flag any structural deviations (missing files, different import patterns, different component hierarchy).
 
 ---
 
@@ -807,3 +859,8 @@ Optional (Storybook):
 9. **Project-structure-aware placement** — detect the project's directory conventions before placing files.
 10. **Responsive breakpoints only when source has them** — do not add responsive behavior unless the source page or user request includes it.
 11. **All icons must come from `@fluentui/react-icons`** as named React component imports — never use icon fonts (`ms-Icon`), Iconify CDN URLs, or external icon services. If no Fluent match exists, auto-extract the original asset from the source page (SVG markup or downloaded image), save to `assets/`, and wrap in a React component. **Every icon must render — no broken placeholders.** See `icon-map.md` for the full two-tier strategy.
+12. **Always consult the decision table first.** Before any build, read `references/decision-table.md` and match the page type. If a row matches, its build plan is authoritative — do not deviate from the specified layout template, fragments, or canonical example.
+13. **Always read the matching canonical example before generating code.** The canonical example in `references/canonical-examples/` is the structural anchor — match its file organization, import patterns, naming conventions, and component hierarchy.
+14. **Always use fragments for recurring sub-patterns.** If a fragment exists in `references/fragments/` for a sub-pattern (command bar, sidebar nav, data table, etc.), use its exact structure. Never regenerate these patterns from scratch.
+15. **Always validate against style assertions during BUILD.** Read `references/style-assertions.md` and check every makeStyles block against its element-type assertions before writing `styles.ts`. Violations must be fixed before the file is written.
+16. **Always run output schema validation after BUILD.** Read `references/output-schema.md` and execute all structural checks and grep commands. All checks must pass before proceeding to VERIFY.
