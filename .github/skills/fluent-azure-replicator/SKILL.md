@@ -208,7 +208,7 @@ Extract computed styles, DOM structure, and screenshots from a live page.
    ```
    Save the accessibility snapshot for reference during BUILD.
 
-9. **Detect and extract assets:**
+9. **Detect and extract assets (including icon auto-extraction):**
    ```javascript
    // Use mcp_microsoft_pla_browser_evaluate:
    (() => {
@@ -216,18 +216,52 @@ Extract computed styles, DOM structure, and screenshots from a live page.
      document.querySelectorAll('img, svg, [style*="background-image"]').forEach(el => {
        const rect = el.getBoundingClientRect();
        if (rect.width === 0 || rect.height === 0) return;
+
+       // Determine if this is an icon (small dimensions, typically ≤48px)
+       const isIcon = rect.width <= 48 && rect.height <= 48;
+       const nearbyLabel = isIcon
+         ? (el.closest('[aria-label]')?.getAttribute('aria-label')
+           || el.closest('button, a, [role="menuitem"]')?.textContent?.trim()?.substring(0, 50)
+           || el.parentElement?.textContent?.trim()?.substring(0, 50)
+           || '')
+         : '';
+
        if (el.tagName === 'IMG') {
-         assets.push({ type: 'img', src: el.src, alt: el.alt, w: Math.round(rect.width), h: Math.round(rect.height) });
-       } else if (el.tagName === 'svg') {
-         assets.push({ type: 'svg', markup: el.outerHTML.substring(0, 500), w: Math.round(rect.width), h: Math.round(rect.height) });
+         assets.push({
+           type: 'img', src: el.src, alt: el.alt,
+           w: Math.round(rect.width), h: Math.round(rect.height),
+           isIcon, nearbyLabel,
+         });
+       } else if (el.tagName === 'svg' || el.tagName === 'SVG') {
+         assets.push({
+           type: 'svg',
+           // Full SVG markup for icons (needed for Tier 2 extraction)
+           markup: isIcon ? el.outerHTML : el.outerHTML.substring(0, 500),
+           viewBox: el.getAttribute('viewBox') || '',
+           w: Math.round(rect.width), h: Math.round(rect.height),
+           isIcon, nearbyLabel,
+           // Capture parent context for icon mapping
+           parentClasses: el.parentElement?.className?.toString?.() || '',
+           dataIconName: el.closest('[data-icon-name]')?.getAttribute('data-icon-name') || '',
+         });
        } else {
          const bg = getComputedStyle(el).backgroundImage;
-         if (bg && bg !== 'none') assets.push({ type: 'bg-image', url: bg, w: Math.round(rect.width), h: Math.round(rect.height) });
+         if (bg && bg !== 'none') assets.push({
+           type: 'bg-image', url: bg,
+           w: Math.round(rect.width), h: Math.round(rect.height),
+           isIcon, nearbyLabel,
+         });
        }
      });
-     return JSON.stringify(assets.slice(0, 50));
+     return JSON.stringify(assets.slice(0, 100));
    })()
    ```
+
+   After extraction, for each asset where `isIcon: true`:
+   - First attempt to match to `@fluentui/react-icons` using `icon-map.md` tables (check `dataIconName`, `nearbyLabel`, `alt` text)
+   - If no match found, save the SVG markup or download the image URL to `<output-dir>/assets/`
+   - Create a React wrapper component in `icons.ts` following the Tier 2 pattern in `icon-map.md`
+   - Goal: **zero broken icons** in the final output
 
 ---
 
@@ -279,8 +313,12 @@ Transform raw extracted data into a build plan.
    - Forms → `Field` + `Input`/`Dropdown`/`Switch`/`Checkbox`
    - Actions → `Button` with appearance `primary`/`subtle`/`outline`/`transparent`
 
-4. **Map icons:**
+4. **Map icons (two-tier strategy):**
    Using `icon-map.md`, identify icon names from SVG paths, class names, or aria-labels.
+   - **Tier 1 (primary):** Match every detected icon to a named export from `@fluentui/react-icons` using the mapping tables. Import as individual React components — never wildcard import.
+   - **Tier 2 (fallback):** For truly custom Azure-branded icons with no Fluent equivalent, plan an inline SVG component with `fill="currentColor"` and `aria-hidden="true"`.
+   - For any icon that toggles between selected/unselected states (nav items, favorites), plan a `bundleIcon(Filled, Regular)` composite.
+   - Use the Icon Detection Heuristic in `icon-map.md` to identify icon source (Fluent v9 SVG, v8 `ms-Icon` font, Font Awesome, Material, image, CSS background).
 
 5. **Match grid template:**
    Use the `fluent-azure-grid-library` skill's MATCH algorithm:
@@ -340,7 +378,10 @@ Generate the actual React component files.
 ├── types.ts           # TypeScript interfaces
 ├── theme.ts           # Azure brand theme (light + dark)
 ├── grid-template.ts   # Extracted/matched grid template definition
-├── icons.ts           # Icon imports used in this component
+├── icons.ts           # Icon imports + auto-extracted icon wrappers
+├── assets/            # Auto-extracted SVGs and downloaded images (Tier 2 icons)
+│   ├── icon-*.svg
+│   └── icon-*.png
 ├── [ComponentName].stories.tsx  # Storybook story
 └── README.md          # Component documentation
 ```
@@ -396,9 +437,15 @@ export const azureDarkTheme: Theme = {
 - Export type interfaces alongside data
 
 #### icons.ts
-- Import only the icons actually used from `@fluentui/react-icons`
-- Use the mappings from `icon-map.md`
-- Prefer `Regular` variants; use `Filled` for active states
+- **Read `icon-map.md` fully** before writing this file — it defines the two-tier strategy, import patterns, `bundleIcon()` usage, sizing, and component integration.
+- Import only the icons actually used from `@fluentui/react-icons` — **named imports only, never `import *`** (the package has 10k+ exports).
+- Use the mapping tables in `icon-map.md` to find the correct Fluent icon for each Azure portal concept.
+- Use `Regular` variant by default; create `bundleIcon(Filled, Regular)` composites for icons that toggle between selected/unselected states.
+- Export aliased names for each icon (e.g., `export { SearchRegular as SearchIcon }`) so `index.tsx` imports from `./icons` with semantic names.
+- For icons with no `@fluentui/react-icons` match, auto-extract the SVG markup or download the image from the source page, save to `assets/` directory, and create a React wrapper component (see Tier 2 in `icon-map.md`).
+- **Never use Iconify URLs, icon CDNs, or external icon services** — all icons must be locally bundled React components.
+- **Never leave broken or placeholder icons** — every icon in the output must render.
+- Follow the `icons.ts` file pattern example in `icon-map.md`.
 
 #### [ComponentName].stories.tsx
 ```typescript
@@ -554,7 +601,7 @@ After BUILD and before VERIFY, run a custom code audit:
 
 1. **For every custom HTML element:** Check if a native Fluent v9 component already handles this. Reference `component-patterns.md`.
 2. **For every hardcoded value:** Check if it should be a `tokens.*` reference. Reference `token-map.md`.
-3. **For every icon:** Verify the import is correct and the icon name exists. Reference `icon-map.md`.
+3. **For every icon:** Verify the import exists in `@fluentui/react-icons`, the name matches the tables in `icon-map.md`, and icons are passed via the `icon` prop slot (not rendered as text children). Verify `bundleIcon()` is used for any toggle/selection state icons. Verify no wildcard imports, no Iconify URLs, no external icon CDNs.
 4. **For every layout section:** Verify it matches the grid template. Reference the matched template file.
 
 ---
@@ -616,3 +663,4 @@ Optional (Storybook):
 8. **Self-contained output** — no imports from shared prototyping apps or external experiment infrastructure.
 9. **Project-structure-aware placement** — detect the project's directory conventions before placing files.
 10. **Responsive breakpoints only when source has them** — do not add responsive behavior unless the source page or user request includes it.
+11. **All icons must come from `@fluentui/react-icons`** as named React component imports — never use icon fonts (`ms-Icon`), Iconify CDN URLs, or external icon services. If no Fluent match exists, auto-extract the original asset from the source page (SVG markup or downloaded image), save to `assets/`, and wrap in a React component. **Every icon must render — no broken placeholders.** See `icon-map.md` for the full two-tier strategy.
