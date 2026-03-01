@@ -258,10 +258,12 @@ Extract computed styles, DOM structure, and screenshots from a live page.
    ```
 
    After extraction, for each asset where `isIcon: true`:
+   - **Record the exact `w` and `h` pixel dimensions** — these are the pixel-perfect target sizes for the BUILD phase
    - First attempt to match to `@fluentui/react-icons` using `icon-map.md` tables (check `dataIconName`, `nearbyLabel`, `alt` text)
    - If no match found, save the SVG markup or download the image URL to `<output-dir>/assets/`
    - Create a React wrapper component in `icons.ts` following the Tier 2 pattern in `icon-map.md`
-   - Goal: **zero broken icons** in the final output
+   - For **every icon** (Tier 1 or Tier 2), add the source dimensions as a comment in `icons.ts` and apply the exact size via a `makeStyles` class — see the pixel-perfect sizing rules in `icon-map.md`
+   - Goal: **zero broken icons AND pixel-perfect sizes** in the final output
 
 ---
 
@@ -500,108 +502,249 @@ Every build produces both light and dark theme support:
 
 ---
 
-## Phase 4: VERIFY
+## Phase 4: VERIFY — Live Side-by-Side Comparison
 
-Self-verify the generated output against the source (Mode A) or spec (Mode B/C).
+Open **both** the original source page and the rendered output in Playwright, extract computed styles from each, and compare element-by-element. This is not a code review — it's a **live visual and data-driven audit**.
 
-**Read `references/verification.md` for the full verification procedure.**
+**Read `references/verification.md` for tolerance thresholds, classification taxonomy, and color distance formulas.**
 
-### Verification Checks
+### Step 1: Render the Output
 
-1. **Visual comparison (Mode A):**
-   - Render built component via Storybook or standalone HTML
-   - Screenshot the rendered output
-   - Compare against reference screenshot from CAPTURE
-   - Classify deviations using the taxonomy in `verification.md`
+Before comparing, the output must be running in a browser.
 
-2. **Grid template fidelity:**
-   - Compare generated layout structure against the matched template
-   - Verify all template slots are present and correctly styled
-   - Check flex/grid properties match template definition
+1. **If the project has Storybook:**
+   ```bash
+   # Start Storybook (background process)
+   npx storybook dev -p 6006 --no-open
+   ```
+   The component's story URL will be `http://localhost:6006/?path=/story/azure-<component-name>--light`
 
-3. **Token compliance:**
-   - Scan `styles.ts` for hardcoded values (hex colors, px font sizes, px spacing)
-   - Every visual property must use a `tokens.*` reference
-   - Azure-specific overrides must use the values from `azure-brand-ramp.md`
+2. **If no Storybook, create a temp HTML harness:**
+   ```bash
+   # Build the component and serve
+   npx vite preview  # or any dev server
+   ```
 
-4. **Component composition validation:**
-   - Read `composition-rules.md`
-   - Check all 14 hard constraints against the generated JSX
-   - Report any violations
+3. **If neither works, create a minimal harness file** (`verify-harness.html`) that imports React + FluentProvider + the built component and renders it full-page. Serve with `npx serve .`
 
-5. **Accessibility audit:**
-   - All images have `alt` text
-   - All interactive elements have accessible names (`aria-label` or visible label)
-   - Color contrast ≥ 4.5:1 for normal text, ≥ 3:1 for large text
-   - Logical heading hierarchy (`h1` → `h2` → `h3`, no skips)
-   - All form inputs associated with labels
-   - Keyboard navigation works (tab order, focus visible)
-   - No `tabIndex > 0`
+Record the **output URL** (e.g., `http://localhost:6006/...` or `http://localhost:3000`).
 
-6. **Interactive state verification:**
-   - Hover states use `tokens.colorNeutralBackground1Hover` (or appropriate hover token)
-   - Focus states show visible focus indicator using `tokens.colorStrokeFocus2`
-   - Disabled states use `tokens.colorNeutralForegroundDisabled`
-   - Active/pressed states use appropriate tokens
+### Step 2: Open Both Pages
 
-7. **Azure theme compliance:**
-   - Brand color `#0078d4` used correctly (not overused)
-   - Status colors match Azure conventions (green=running, red=error, yellow=warning, grey=stopped)
-   - Navigation patterns follow Azure portal conventions
-
-### Verification Report
-
-Output a structured report:
+Open the **source page** and the **output page** in separate Playwright tabs:
 
 ```
+1. Use mcp_microsoft_pla_browser_install (if not already installed)
+2. Use mcp_microsoft_pla_browser_navigate with url=<source-url>
+3. Use mcp_microsoft_pla_browser_take_screenshot — save as "verify-source.png"
+```
+
+Then open a new tab for the output:
+```
+4. Use mcp_microsoft_pla_browser_navigate with url=<output-url>
+5. Use mcp_microsoft_pla_browser_take_screenshot — save as "verify-output.png"
+```
+
+### Step 3: Extract Computed Styles from Both Pages
+
+Run the **same** style extraction script on both pages to produce comparable JSON. Switch between tabs to extract from each.
+
+**On the SOURCE page:**
+```javascript
+// Use mcp_microsoft_pla_browser_evaluate:
+(() => {
+  const results = [];
+  document.querySelectorAll('*').forEach(el => {
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const cs = getComputedStyle(el);
+    const tag = el.tagName.toLowerCase();
+    const text = (el.childNodes.length === 1 && el.childNodes[0].nodeType === 3)
+      ? el.textContent?.trim().substring(0, 80) : '';
+    const role = el.getAttribute('role') || '';
+    const ariaLabel = el.getAttribute('aria-label') || '';
+
+    // Detect icons
+    const isIcon = (tag === 'svg' || tag === 'img') && rect.width <= 48 && rect.height <= 48;
+
+    results.push({
+      tag, text, role, ariaLabel, isIcon,
+      rect: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) },
+      styles: {
+        color: cs.color,
+        backgroundColor: cs.backgroundColor,
+        fontSize: cs.fontSize,
+        fontWeight: cs.fontWeight,
+        fontFamily: cs.fontFamily,
+        lineHeight: cs.lineHeight,
+        display: cs.display,
+        flexDirection: cs.flexDirection,
+        alignItems: cs.alignItems,
+        justifyContent: cs.justifyContent,
+        gap: cs.gap,
+        padding: cs.padding,
+        margin: cs.margin,
+        borderRadius: cs.borderRadius,
+        border: cs.border,
+        boxShadow: cs.boxShadow,
+        width: cs.width,
+        height: cs.height,
+        opacity: cs.opacity,
+      },
+    });
+  });
+  return JSON.stringify(results.slice(0, 300));
+})()
+```
+
+Save the result as `source-styles.json`.
+
+**Switch to the OUTPUT page** and run the identical script. Save as `output-styles.json`.
+
+### Step 4: Element-by-Element Comparison
+
+Match elements between source and output using `verification.md` matching rules (semantic role → visual position → text content → DOM structure). For each matched pair, compare every property using the tolerance thresholds:
+
+**Walk through these categories in order:**
+
+#### 4a. Layout Structure
+- Compare every flex/grid container: `display`, `flexDirection`, `gridTemplateColumns`, `gap`, child count
+- Verify the overall page structure matches (sidebar width, content areas, header height)
+- **Tolerance:** must match exactly — any layout type change is reported
+
+#### 4b. Typography
+- Compare every text element: `fontSize`, `fontWeight`, `fontFamily`, `lineHeight`, `color`
+- **Tolerance:** font size ±2px, font weight exact, color ΔE ≤15
+
+#### 4c. Colors & Backgrounds
+- Compare every surface: `backgroundColor`, `color`, `borderColor`
+- **Tolerance:** RGB distance ≤15 = close enough, 16–40 = minor, 41–80 = significant, >80 = major
+
+#### 4d. Spacing
+- Compare `padding`, `margin`, `gap` on all elements
+- **Tolerance:** ±2px = close enough, 3–4px = minor, 5–8px = significant, >8px = major
+
+#### 4e. Borders & Shadows
+- Compare `border`, `borderRadius`, `boxShadow`
+- **Tolerance:** borderRadius ±2px, shadow must map to a Fluent elevation token
+
+#### 4f. Icons (Pixel-Perfect)
+- For every element where `isIcon: true`, compare `rect.w` and `rect.h` between source and output
+- **Tolerance: 0px** — icon sizes must match exactly
+- Also verify icon color matches the source (via the `color` or `fill` property)
+- Report any mismatch as severity **major**
+
+#### 4g. Interactive States
+Use Playwright to verify hover/focus/disabled states:
+
+```
+1. Use mcp_microsoft_pla_browser_hover on each button/link in the OUTPUT page
+2. Use mcp_microsoft_pla_browser_evaluate to extract hovered computed styles
+3. Compare against expected Fluent hover tokens (e.g., colorNeutralBackground1Hover)
+4. Tab through interactive elements to verify focus ring visibility
+```
+
+#### 4h. Accessibility
+```
+1. Use mcp_microsoft_pla_browser_snapshot on the OUTPUT page
+2. Check: all interactive elements have accessible names
+3. Check: heading hierarchy is sequential
+4. Check: images have alt text
+5. Calculate WCAG contrast ratios for all foreground/background pairs
+```
+
+### Step 5: Generate Verification Report
+
+Compile all findings into a **brief, actionable report**. The report has three sections:
+
+```markdown
 ## Verification Report
 
 ### Summary
+- Source: <source-url>
+- Output: <output-url>  
 - Mode: A (URL replication) / B (description) / C (Figma)
-- Template: azure-resource-blade (score: 0.85)
-- Overall: PASS / PASS WITH WARNINGS / FAIL
+- Template: <matched-template> (score: X.XX)
+- Elements compared: N source → M output (K matched)
+- Overall: ✅ PASS / ⚠️ PASS WITH WARNINGS / ❌ FAIL
 
-### Token Compliance: ✅ PASS
-- 0 hardcoded values found
+### Results
 
-### Grid Fidelity: ✅ PASS
-- 5/5 template slots present
-- All flex/grid properties match
+| Category | Status | Details |
+|----------|--------|---------|
+| Layout structure | ✅ | N/N containers match |
+| Typography | ✅ | All text within ±2px |
+| Colors | ⚠️ | 2 minor deviations (TOKEN-SNAP) |
+| Spacing | ✅ | All within ±2px |
+| Borders & shadows | ✅ | All mapped to Fluent tokens |
+| Icon sizes | ✅ | N/N pixel-perfect |
+| Icon rendering | ✅ | 0 broken, 0 missing |
+| Interactive states | ✅ | Hover, focus, disabled verified |
+| Accessibility | ✅ | All checks pass, contrast AA ✅ |
+| Token compliance | ✅ | 0 hardcoded values |
+| Dark mode | ✅ | Renders correctly |
 
-### Composition Rules: ✅ PASS
-- 14/14 hard constraints satisfied
-- 5/5 soft constraints satisfied
+### Deviations (if any)
 
-### Accessibility: ⚠️ WARNINGS
-- 2 images missing alt text (lines 45, 67)
-- Heading hierarchy: OK
+| # | Element | Property | Source | Output | Δ | Severity | Classification |
+|---|---------|----------|--------|--------|---|----------|----------------|
+| 1 | sidebar bg | background | #f3f2f1 | #fafafa | ΔE 12 | minor | TOKEN-SNAP |
+| 2 | card padding | padding | 14px | 16px | 2px | minor | TOKEN-SNAP |
 
-### Interactive States: ✅ PASS
-- Hover: verified
-- Focus: verified
-- Disabled: verified
+### Next Steps
 
-### Visual Comparison (Mode A): ✅ PASS
-- Color ΔE2000 max: 3.2 (within tolerance)
-- Layout deviation: 2px max (within tolerance)
-- 0 critical deviations, 2 minor deviations
+<!-- Auto-generated based on findings -->
+- [ ] **Fix:** [list any MAJOR severity items that must be corrected]
+- [ ] **Review:** [list SIGNIFICANT items that may need adjustment]
+- [ ] **Accept:** [list MINOR items that are acceptable token snaps]
 
-### Deviations
-| # | Type  | Severity | Element        | Source      | Output      | Action      |
-|---|-------|----------|----------------|-------------|-------------|-------------|
-| 1 | color | minor    | sidebar bg     | #f3f2f1     | #fafafa     | token match |
-| 2 | space | minor    | card padding   | 14px        | 16px        | token snap  |
+### Questions for User
+
+<!-- Auto-generated when the agent can't determine intent -->
+- The source uses a custom gradient on the header — should we keep it as custom CSS or replace with `colorBrandBackground`?
+- The source sidebar is 215px but the nearest Fluent spacing token gives 220px — accept 220px or force 215px?
 ```
+
+### Decision Rules for Next Steps vs Questions
+
+**Auto-fix (no question needed):**
+- Icon size mismatch → fix the `fontSize` in `makeStyles`
+- Missing `aria-label` → add it
+- Hardcoded color → replace with token
+- Missing icon → re-run detection or auto-extract
+
+**Ask the user (generate a Question):**
+- Source uses custom styling with no clear Fluent equivalent (gradients, custom animations)
+- Source spacing doesn't align to any Fluent token and the visual gap is >4px
+- Source uses a component pattern that could map to multiple Fluent components
+- Dark mode reveals issues that weren't in the source (source had no dark mode)
+- Source has accessibility issues that would be inherited (low contrast in source)
+
+**Report as accepted deviation:**
+- Color difference ΔE ≤15 (imperceptible token snap)
+- Spacing difference ≤2px (sub-pixel token snap)
+- Font weight mapped to nearest Fluent weight (e.g., 450 → 400)
+- Border radius snapped to Fluent token (e.g., 3px → `borderRadiusSmall` = 4px)
+
+### Step 6: Auto-Fix and Re-Verify
+
+If the report contains any **MAJOR** severity items:
+
+1. Fix each major item in the source code
+2. Rebuild / hot-reload the output
+3. Re-run Steps 3–5 on the updated output
+4. Continue until all major items are resolved or converted to user questions
+5. Present the final report to the user
 
 ---
 
 ## Post-Build Self-Review
 
-After BUILD and before VERIFY, run a custom code audit:
+After BUILD and before the live VERIFY, run a static code audit:
 
 1. **For every custom HTML element:** Check if a native Fluent v9 component already handles this. Reference `component-patterns.md`.
 2. **For every hardcoded value:** Check if it should be a `tokens.*` reference. Reference `token-map.md`.
-3. **For every icon:** Verify the import exists in `@fluentui/react-icons`, the name matches the tables in `icon-map.md`, and icons are passed via the `icon` prop slot (not rendered as text children). Verify `bundleIcon()` is used for any toggle/selection state icons. Verify no wildcard imports, no Iconify URLs, no external icon CDNs.
+3. **For every icon:** Verify the import exists in `@fluentui/react-icons`, the name matches the tables in `icon-map.md`, and icons are passed via the `icon` prop slot (not rendered as text children). Verify `bundleIcon()` is used for any toggle/selection state icons. Verify no wildcard imports, no Iconify URLs, no external icon CDNs. **Verify that every icon has a `makeStyles` class setting its exact source pixel dimensions** — check the size comments in `icons.ts` against the `fontSize` values in `styles.ts`.
 4. **For every layout section:** Verify it matches the grid template. Reference the matched template file.
 
 ---

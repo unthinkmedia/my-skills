@@ -1,33 +1,63 @@
 # Verification Procedure
 
-How to self-check a Fluent Azure recreation against the original UI. This is Phase 4 of the fluent-azure-replicator skill. Extended from the base fluent2-converter verification with grid structure comparison, Azure theme compliance, accessibility audit, and interactive state validation.
+How to verify a Fluent Azure recreation against the original UI. This is Phase 4 of the fluent-azure-replicator skill. The agent opens **both** the source page and the rendered output in Playwright, extracts computed styles from each, and compares element-by-element.
+
+> **This is a live comparison — not a code review.** Both pages must be running in a browser. The agent navigates between them, extracts real computed styles, and flags every deviation with a severity, classification, and recommended action.
 
 ---
 
 ## Table of Contents
 
-1. [Comparison Setup](#comparison-setup)
-2. [Property Comparison Logic](#property-comparison)
-3. [Tolerance Thresholds](#tolerances)
-4. [Diff Classification Taxonomy](#classification)
-5. [Color Distance Calculation](#color-distance)
-6. [Grid Structure Comparison](#grid-comparison)
-7. [Accessibility Audit](#accessibility-audit)
-8. [Interactive State Verification](#interactive-states)
-9. [Azure Theme Compliance](#azure-compliance)
-10. [Report Format](#report-format)
+1. [Live Comparison Procedure](#live-comparison-procedure)
+2. [Element Matching](#element-matching)
+3. [Property Comparison Logic](#property-comparison)
+4. [Tolerance Thresholds](#tolerances)
+5. [Diff Classification Taxonomy](#classification)
+6. [Color Distance Calculation](#color-distance)
+7. [Grid Structure Comparison](#grid-comparison)
+8. [Accessibility Audit](#accessibility-audit)
+9. [Interactive State Verification](#interactive-states)
+10. [Azure Theme Compliance](#azure-compliance)
+11. [Report Format](#report-format)
+12. [Next Steps & Questions Logic](#next-steps-logic)
+13. [Auto-Fix & Re-Verify Loop](#auto-fix-loop)
 
 ---
 
-## Comparison Setup
+## Live Comparison Procedure
 
 ### Prerequisites
 
-You need two JSON files from the style extraction script:
-- `captured-styles.json` — extracted from the original UI (Phase 1)
-- `recreated-styles.json` — extracted from the Fluent v9 version (Phase 4)
+Two pages must be accessible in the browser simultaneously:
+- **Source page** — the original URL being replicated (or a screenshot + `captured-styles.json` from CAPTURE phase)
+- **Output page** — the built component rendered via Storybook (`localhost:6006`), Vite dev server, or a temp HTML harness
 
-### Element Matching
+### Extraction
+
+Run the identical computed-style extraction script on both pages (see SKILL.md Phase 4, Step 3). This produces two comparable JSON arrays of element data:
+- `source-styles.json` — from the source page
+- `output-styles.json` — from the output page
+
+Each element entry contains: `tag`, `text`, `role`, `ariaLabel`, `isIcon`, `rect { x, y, w, h }`, and `styles { color, backgroundColor, fontSize, fontWeight, ... }`
+
+### Comparison Flow
+
+```
+For each source element:
+  1. Find matching output element (see Element Matching)
+  2. If no match → flag as MISSING
+  3. If match found → compare every property (see Property Comparison)
+  4. Classify each deviation (see Classification)
+  5. Determine severity (see Tolerances)
+  6. If isIcon → apply 0px tolerance for size
+
+For each output element with no source match:
+  → flag as EXTRA (may be intentional Fluent wrapper, or an error)
+```
+
+---
+
+## Element Matching
 
 Elements are matched between original and recreation by:
 1. **Semantic role** — matching by ARIA role, tag purpose (heading level, nav, main, etc.)
@@ -98,7 +128,14 @@ RGB euclidean distance: `sqrt((r1-r2)² + (g1-g2)² + (b1-b2)²)`
 | 3–4px | Minor — report as TOKEN-SNAP |
 | 5–8px | Significant — report with explanation |
 | > 8px | Major — must explain |
+### Icon size tolerance
 
+Icon sizes are **pixel-perfect — 0px tolerance**. The source icon dimensions (captured via `getBoundingClientRect()`) must be reproduced exactly in the output via `makeStyles` `fontSize` (or explicit `width`/`height` for non-square icons). Any deviation is reported as severity **major**.
+
+| Pixel difference | Verdict |
+|-----------------|--------|
+| 0 | Exact match |
+| ≥ 1px | Major — must fix. Set exact `fontSize` in `makeStyles` to match source dimensions. |
 ### Font weight tolerance
 
 Must be exact match to a Fluent weight token (400, 500, 600, 700). Any change gets reported.
@@ -421,3 +458,83 @@ For each element with differences:
 | Table row | hover | colorNeutralBackground1Hover | #f5f5f5 | ✅ |
 | Nav item | active | colorNeutralBackground1Pressed | #e0e0e0 | ✅ |
 ```
+
+### Next Steps & Questions section
+
+The report must end with **Next Steps** and **Questions for User**. These are generated automatically based on deviation severity and classification.
+
+```markdown
+### Next Steps
+
+- [ ] **Fix:** Sidebar icon is 18px but source is 16px — update `makeStyles` fontSize to 16px [MAJOR]
+- [ ] **Fix:** Missing `aria-label` on filter button — add descriptive label [MAJOR]
+- [ ] **Review:** Header background is #f5f5f5 vs source #f0f0f0 — ΔE 8, within TOKEN-SNAP but visible [SIGNIFICANT]
+- [ ] **Accept:** Card padding 14px → 16px (spacingHorizontalM) — standard Fluent token snap [MINOR]
+- [ ] **Accept:** Font weight 450 → 400 — nearest Fluent weight token [MINOR]
+
+### Questions for User
+
+1. The source header uses `linear-gradient(135deg, #667eea, #764ba2)` — should we (a) replace with solid `colorBrandBackground`, (b) keep as custom CSS, or (c) use two adjacent colored sections?
+2. The source sidebar is 215px — the nearest Fluent-friendly value is 220px (spacingHorizontalXXXL × multiples). Accept 220px or force 215px with a custom value?
+3. The source has no dark mode — should the dark theme variant match a "best guess" dark version, or skip dark mode entirely?
+```
+
+### Decision rules for Next Steps vs Questions
+
+**Auto-generate as "Fix" (severity MAJOR):**
+- Icon size mismatch (any Δ ≥ 1px)
+- Missing accessibility attributes (aria-label, alt text, role)
+- Hardcoded color/font/spacing in `styles.ts` (should be a token)
+- Broken or missing icon (not rendering)
+- Layout type mismatch (flex vs grid vs block)
+
+**Auto-generate as "Review" (severity SIGNIFICANT):**
+- Color difference ΔE 41–80
+- Spacing difference 5–8px
+- Font size difference 5–8px
+- Shadow mismatch that doesn't map to any Fluent elevation
+
+**Auto-generate as "Accept" (severity MINOR):**
+- Color difference ΔE 16–40 (token snap)
+- Spacing difference 3–4px (token snap)
+- Font weight mapped to nearest Fluent weight
+- Border radius snapped to Fluent token
+
+**Auto-generate as "Question" (agent can't decide):**
+- Source uses custom CSS with no Fluent equivalent (gradients, animations, clip-path)
+- Source spacing doesn't align to any Fluent token AND the visual gap is >4px
+- Multiple valid Fluent components could represent the same source pattern
+- Dark mode reveals issues not present in source (source had no dark mode)
+- Source has accessibility issues that would be inherited (low contrast in original)
+- Source uses a third-party component with no Fluent counterpart
+
+---
+
+## Auto-Fix & Re-Verify Loop
+
+When the report contains **MAJOR** severity items:
+
+1. **Auto-fix each major item** — the agent edits the source files directly:
+   - Icon size wrong → update `fontSize` in `styles.ts`
+   - Missing aria-label → add to the JSX in `index.tsx`
+   - Hardcoded color → replace with `tokens.*`
+   - Missing icon → re-run icon detection or auto-extract
+
+2. **Rebuild** — hot-reload or rebuild the output component
+
+3. **Re-verify** — re-run Steps 3–5 from the SKILL.md Phase 4 procedure:
+   - Navigate to the output page
+   - Re-extract computed styles
+   - Compare against source styles again
+   - Generate an updated report
+
+4. **Repeat** until:
+   - All MAJOR items are resolved, OR
+   - A MAJOR item requires user input → convert to a Question
+
+5. **Present the final report** to the user with:
+   - All remaining deviations (MINOR/SIGNIFICANT only)
+   - Any Questions that need user decisions
+   - A confirmation that all MAJOR items have been resolved
+
+The loop should not exceed **3 iterations**. If items can't be resolved in 3 passes, surface them as Questions.

@@ -106,32 +106,75 @@ const useStyles = makeStyles({
 <CheckmarkCircleRegular className={styles.statusIcon} />
 ```
 
-### Icon Sizing
+### Icon Sizing — Pixel-Perfect Match Required
 
-Icons inherit their size from `font-size` on the element or parent. The numeric suffix in the import name controls the **design detail level** (stroke weight, visual density), not the rendered size.
+Icons must be **pixel-perfect** to the original document. Do not round to the nearest Fluent "standard" size — match the exact rendered dimensions from the source.
+
+During CAPTURE, each icon's `w` and `h` (in CSS pixels from `getBoundingClientRect()`) are recorded. These are the **target dimensions** and must be reproduced exactly in the output.
+
+#### How to set exact icon size
+
+Fluent React icons render as inline SVGs that inherit size from `font-size`. Set the exact pixel size via `fontSize` in a `makeStyles` class:
 
 ```tsx
-// Preferred: set size via the component's size prop
-<Button size="small" icon={<AddRegular />}>Add</Button>   // 16px icon
-<Button size="medium" icon={<AddRegular />}>Add</Button>  // 20px icon
-<Button size="large" icon={<Add24Regular />}>Add</Button>  // 24px icon
+import { makeStyles } from '@fluentui/react-components';
+import { SettingsRegular } from '@fluentui/react-icons';
 
-// Standalone: control size via fontSize
-<SearchRegular style={{ fontSize: '24px' }} />
-
-// Via makeStyles
 const useStyles = makeStyles({
-  largeIcon: { fontSize: '24px' },
+  // Source icon was 14px × 14px — match exactly
+  navIcon: { fontSize: '14px' },
+  // Source icon was 18px × 18px — match exactly
+  headerIcon: { fontSize: '18px' },
+  // Source icon was 22px × 22px — match exactly
+  titleIcon: { fontSize: '22px' },
 });
+
+// Apply the class to the icon component
+<SettingsRegular className={styles.navIcon} />
 ```
 
-**Size guide for Azure portal UI:**
+#### Size rules
 
-| Context | Icon size | Import suffix |
-|---------|-----------|---------------|
-| Table cell, compact list, Badge | 16px | `16Regular` |
-| Buttons, toolbar, standard nav, menu items | 20px | `Regular` (default) |
-| Page headers, card titles, command bar primary | 24px | `24Regular` |
+1. **Always use the exact pixel value from the source** — not the nearest Fluent "standard" size. If the source icon is 14px, use `fontSize: '14px'`, not 16px.
+2. **For icons inside Fluent components** (`Button`, `MenuItem`, etc.), the component's `size` prop controls icon size. If the component's default doesn't match the source, override with a `makeStyles` class on the icon element:
+   ```tsx
+   // Button renders 20px icons at size="medium", but source had 16px icons
+   <Button icon={<AddRegular className={styles.icon16} />}>Add</Button>
+   ```
+3. **For auto-extracted icons (Tier 2)**, set explicit `width` and `height` attributes on the `<svg>` or `<img>` to match the source dimensions exactly.
+4. **Non-square icons** — if the source icon has different width and height (e.g., 20×16), set both explicitly:
+   ```tsx
+   const useStyles = makeStyles({
+     wideIcon: { width: '20px', height: '16px' },
+   });
+   ```
+5. **Record all icon sizes** in the `icons.ts` file as comments for verification:
+   ```tsx
+   // AddIcon: source 16×16px
+   export { AddRegular as AddIcon } from '@fluentui/react-icons';
+   // SettingsIcon: source 14×14px
+   export { SettingsRegular as SettingsIcon } from '@fluentui/react-icons';
+   ```
+
+#### Import suffix vs rendered size
+
+The numeric suffix in the import name (e.g., `Settings16Regular` vs `Settings24Regular`) controls the **design detail level** (stroke weight, visual density) — NOT the rendered size. Choose the suffix whose detail level best matches the target size, then set the exact rendered size via `fontSize`:
+
+| Target size | Best import suffix | Why |
+|-------------|-------------------|-----|
+| 10–14px | `12Regular` or `16Regular` | Thinner strokes for small rendering |
+| 15–18px | `16Regular` or `Regular` (20) | Medium stroke detail |
+| 19–22px | `Regular` (20) | Default detail level |
+| 23–28px | `24Regular` | Slightly bolder for larger rendering |
+| 29–48px | `32Regular` or `48Regular` | Full detail for hero sizes |
+
+**Size guide for Azure portal UI (common observed sizes):**
+
+| Context | Typical source size | Import suffix |
+|---------|-------------------|---------------|
+| Table cell, compact list, Badge | 12–16px | `16Regular` |
+| Buttons, toolbar, standard nav, menu items | 16–20px | `Regular` (20) |
+| Page headers, card titles, command bar primary | 20–24px | `24Regular` |
 | Hero sections, empty states | 32–48px | `32Regular` / `48Regular` |
 
 ---
