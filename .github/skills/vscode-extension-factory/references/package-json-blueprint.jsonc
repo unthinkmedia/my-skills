@@ -1,0 +1,53 @@
+{
+  // Companion blueprint for extension scaffolds produced by this skill.
+  "name": "your-extension-id",
+  "displayName": "Your Extension Name",
+  "description": "Short value-focused extension summary.",
+  "version": "0.1.0",
+  "publisher": "your-publisher",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "vscode",
+    "extension"
+  ],
+  "activationEvents": [
+    "onCommand:yourExtension.hello"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "yourExtension.hello",
+        "title": "Your Extension: Hello"
+      }
+    ],
+    "configuration": {
+      "title": "Your Extension",
+      "properties": {
+        "yourExtension.enableFeature": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable feature behavior."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.0.0",
+    "@vscode/test-electron": "^2.4.0"
+  }
+}
